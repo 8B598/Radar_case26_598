@@ -1,8 +1,18 @@
+"""!
+@file main.py
+@brief Основной файл службы контроля хранилища изображений.
+@details Использует бинарный поиск для нахождения оптимального
+         качества сжатия, обеспечивая максимальную эффективность.
+@author Кристина
+"""
+
 import configparser
 import os
 import time
 import io
 from PIL import Image
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 # --- Глобальные переменные ---
 TARGET_DIRECTORY = ""
@@ -125,6 +135,15 @@ def process_image(image_path):
     except Exception as e:
         print(f"Ошибка: Произошла непредвиденная ошибка при обработке файла: {e}")
 
+
+class NewImageHandler(FileSystemEventHandler):
+    """! @brief Обработчик событий, реагирующий на создание новых файлов. """
+    def on_created(self, event):
+        if not event.is_directory:
+            valid_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.gif')
+            if event.src_path.lower().endswith(valid_extensions):
+                process_image(event.src_path)
+
 if __name__ == "__main__":
     if load_config():
         print("="*50)
@@ -132,21 +151,17 @@ if __name__ == "__main__":
         print(f"Отслеживаемая директория: {TARGET_DIRECTORY}")
         print(f"Максимальный размер файла: {MAX_SIZE_KB} КБ")
         print("="*50)
+        print("Ожидание новых файлов... (Для остановки нажмите Ctrl+C)")
 
-        image_to_process = None
-        valid_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.gif')
-        
-        # Ищем первый попавшийся файл с нужным расширением в папке
-        for filename in os.listdir(TARGET_DIRECTORY):
-            if filename.lower().endswith(valid_extensions):
-                image_to_process = os.path.join(TARGET_DIRECTORY, filename)
-                break # Нашли, выходим из цикла
-        
-        # Если файл был найден, вызываем нашу функцию обработки
-        if image_to_process:
-            print(f"\nНайдено изображение для теста: {os.path.basename(image_to_process)}")
-            process_image(image_to_process)
-            print("\nТестовая обработка завершена.")
-        else:
-            print(f"\nВ директории '{TARGET_DIRECTORY}' не найдено изображений для теста.")
-            print("Пожалуйста, поместите туда .jpg или .png файл и запустите скрипт снова.")
+        event_handler = NewImageHandler()
+        observer = Observer()
+        observer.schedule(event_handler, TARGET_DIRECTORY, recursive=False)
+        observer.start()
+
+        try:
+            while True:
+                time.sleep(5)
+        except KeyboardInterrupt:
+            observer.stop()
+            print("\nСлужба остановлена.")
+        observer.join()
