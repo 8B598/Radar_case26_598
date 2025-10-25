@@ -1,5 +1,8 @@
 import configparser
 import os
+import time
+import io
+from PIL import Image
 
 # --- Глобальные переменные ---
 TARGET_DIRECTORY = ""
@@ -35,6 +38,93 @@ def load_config(file_path='config.ini'):
         return False
         
     return True
+
+def find_optimal_quality(img, original_format):
+    """!
+    @brief Находит максимальное качество сжатия с помощью бинарного поиска.
+    @param img: Объект изображения PIL.
+    @param original_format: Формат исходного изображения (JPEG, PNG).
+    @return: Оптимальное качество (int) и бинарный объект изображения (bytes).
+    """
+    low = 1
+    high = 95  # Максимальное осмысленное качество для JPEG
+    best_quality = -1
+    best_image_bytes = None
+
+    while low <= high:
+        mid = (low + high) // 2
+        buffer = io.BytesIO()
+        img.save(buffer, format=original_format, quality=mid, optimize=True)
+        
+        if buffer.tell() <= MAX_SIZE_BYTES:
+            best_quality = mid
+            best_image_bytes = buffer.getvalue()
+            low = mid + 1  # Попробуем найти качество получше
+        else:
+            high = mid - 1 # Качество слишком высокое, ищем в нижней половине
+            
+    return best_quality, best_image_bytes
+
+def process_image(image_path):
+    """!
+    @brief Обрабатывает изображение, гарантированно приводя его к нужному размеру.
+    @param image_path: Путь к новому изображению.
+    """
+    try:
+        time.sleep(1) # Даем файлу полностью записаться на диск
+        print(f"\nОбнаружен новый файл: {os.path.basename(image_path)}")
+        
+        with Image.open(image_path) as img:
+            original_format = img.format
+            
+            # 1. Преобразование в оттенки серого
+            if img.mode != 'L':
+                print("  -> Преобразование в оттенки серого...")
+                img = img.convert('L')
+            
+            # 2. Проверка размера и запуск сжатия, если необходимо
+            buffer = io.BytesIO()
+            img.save(buffer, format=original_format)
+            
+            if buffer.tell() <= MAX_SIZE_BYTES:
+                print(f"  -> Размер ({buffer.tell()/1024:.2f} КБ) уже соответствует лимиту. Сохранение.")
+                with open(image_path, 'wb') as f:
+                    f.write(buffer.getvalue())
+                return
+
+            print(f"  -> Размер ({buffer.tell()/1024:.2f} КБ) превышает лимит. Поиск оптимального сжатия...")
+            
+            # 3. Бинарный поиск оптимального качества
+            quality, image_bytes = find_optimal_quality(img, original_format)
+            if quality != -1:
+                print(f"  -> Успех! Найдено оптимальное качество ({quality}%). Файл сохранен.")
+                with open(image_path, 'wb') as f:
+                    f.write(image_bytes)
+                return
+
+            # 4. Если сжатия недостаточно, уменьшаем разрешение
+            print("  -> Сжатия недостаточно. Уменьшение разрешения...")
+            while True:
+                new_width = int(img.width * 0.9)
+                new_height = int(img.height * 0.9)
+                if new_width < 10 or new_height < 10:
+                    print("Ошибка: Невозможно уменьшить разрешение дальше.")
+                    break
+                
+                img = img.resize((new_width, new_height), Image.LANCZOS)
+                quality, image_bytes = find_optimal_quality(img, original_format)
+                
+                if quality != -1:
+                    print(f"  -> Успех! Файл сохранен с разрешением {new_width}x{new_height} и качеством {quality}%.")
+                    with open(image_path, 'wb') as f:
+                        f.write(image_bytes)
+                    return
+
+    except (IOError, SyntaxError) as e:
+        print(f"Ошибка: Файл {os.path.basename(image_path)} не является изображением или поврежден: {e}")
+    except Exception as e:
+        print(f"Ошибка: Произошла непредвиденная ошибка при обработке файла: {e}")
+
 if __name__ == "__main__":
     if load_config():
         print("="*50)
@@ -42,3 +132,21 @@ if __name__ == "__main__":
         print(f"Отслеживаемая директория: {TARGET_DIRECTORY}")
         print(f"Максимальный размер файла: {MAX_SIZE_KB} КБ")
         print("="*50)
+
+        image_to_process = None
+        valid_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.gif')
+        
+        # Ищем первый попавшийся файл с нужным расширением в папке
+        for filename in os.listdir(TARGET_DIRECTORY):
+            if filename.lower().endswith(valid_extensions):
+                image_to_process = os.path.join(TARGET_DIRECTORY, filename)
+                break # Нашли, выходим из цикла
+        
+        # Если файл был найден, вызываем нашу функцию обработки
+        if image_to_process:
+            print(f"\nНайдено изображение для теста: {os.path.basename(image_to_process)}")
+            process_image(image_to_process)
+            print("\nТестовая обработка завершена.")
+        else:
+            print(f"\nВ директории '{TARGET_DIRECTORY}' не найдено изображений для теста.")
+            print("Пожалуйста, поместите туда .jpg или .png файл и запустите скрипт снова.")
